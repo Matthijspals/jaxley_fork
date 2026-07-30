@@ -35,14 +35,71 @@ def test_cycle_consistency():
     cell.to_jax()
 
     init_fn, step_fn = build_init_and_step_fn(cell)
-    remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(
-        cell
-    )
+    (
+        remove_observables,
+        add_observables,
+        flatten,
+        unflatten,
+        restore_structure,
+    ) = build_dynamic_state_utils(cell)
     all_states, all_params = init_fn([])
     dynamic_states = flatten(remove_observables(all_states))
     restored = add_observables(unflatten(dynamic_states), all_params, delta_t=0.025)
     reraveled = flatten(remove_observables(restored))
     assert np.allclose(reraveled, dynamic_states)
+
+    # restore_structure restores padding/branchpoints but does not compute currents.
+    structured = restore_structure(unflatten(dynamic_states))
+    assert "i_HH" not in structured
+    assert "i_Leak" not in structured
+    assert "i_HH" in restored
+    assert np.allclose(structured["v"], restored["v"])
+    assert np.allclose(structured["HH_m"], restored["HH_m"])
+
+
+def test_restore_structure_step_matches_add_observables():
+    """For HH, step after restore_structure matches step after add_observables."""
+    cell = jx.Cell(jx.Branch(jx.Compartment(), ncomp=4), parents=[-1])
+    cell.insert(HH())
+    delta_t = 0.025
+    t_max = 1.0
+    n_steps = int(t_max / delta_t)
+    cell.branch(0).comp(0).stimulate(jx.step_current(0.1, 0.5, 0.05, delta_t, t_max))
+    cell.to_jax()
+
+    init_fn, step_fn = build_init_and_step_fn(cell)
+    (
+        remove_observables,
+        add_observables,
+        flatten,
+        unflatten,
+        restore_structure,
+    ) = build_dynamic_state_utils(cell)
+
+    all_states, all_params = init_fn([])
+    dynamic_states = flatten(remove_observables(all_states))
+    externals = cell.externals.copy()
+    external_inds = cell.external_inds.copy()
+
+    dyn_add = dynamic_states
+    dyn_restore = dynamic_states
+    for step in range(n_steps):
+        externals_now = {k: externals[k][:, step] for k in externals}
+
+        all_states_add = add_observables(unflatten(dyn_add), all_params, delta_t)
+        all_states_add = step_fn(
+            all_states_add, all_params, externals_now, external_inds, delta_t=delta_t
+        )
+        dyn_add = flatten(remove_observables(all_states_add))
+
+        all_states_restore = restore_structure(unflatten(dyn_restore))
+        assert "i_HH" not in all_states_restore
+        all_states_restore = step_fn(
+            all_states_restore, all_params, externals_now, external_inds, delta_t=delta_t
+        )
+        dyn_restore = flatten(remove_observables(all_states_restore))
+
+        assert np.allclose(dyn_add, dyn_restore)
 
 
 @pytest.mark.parametrize(
@@ -60,19 +117,28 @@ def test_build_step_dynamics_fn_branchpoints(branchpoint):
 
     # get states and unflatten functions
     init_fn, step_fn = build_init_and_step_fn(cell)
-    remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(
-        cell
-    )
+    (
+        remove_observables,
+        add_observables,
+        flatten,
+        unflatten,
+        restore_structure,
+    ) = build_dynamic_state_utils(cell)
     all_states, all_params = init_fn([])
     dynamic_states = flatten(remove_observables(all_states))
 
     # check lengths
     tree = unflatten(dynamic_states)
+    structured = restore_structure(tree)
     full_tree = add_observables(tree, all_params, delta_t=0.025)
     v_len_full = len(full_tree["v"])
     v_len = len(tree["v"])
+    v_len_structured = len(structured["v"])
     i_hh_len = len(full_tree["i_HH"])
     i_hh_m_nonzero = np.count_nonzero(~np.isnan(full_tree["HH_m"]))
+
+    assert "i_HH" not in structured
+    assert v_len_structured == v_len_full
 
     if branchpoint:
         assert v_len == 24
@@ -138,9 +204,13 @@ def test_jit_and_grad_network():
     state_idx = 0
 
     init_fn, step_fn = build_init_and_step_fn(net)
-    remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(
-        net
-    )
+    (
+        remove_observables,
+        add_observables,
+        flatten,
+        unflatten,
+        _,
+    ) = build_dynamic_state_utils(net)
 
     def init_dynamics(params, param_state):
         all_states, all_params = init_fn(params, None, param_state)

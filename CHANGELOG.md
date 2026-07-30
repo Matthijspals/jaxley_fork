@@ -7,6 +7,12 @@ Implements Brette et al. (2005), 'Adaptive exponential integrate-and-fire model 
 - Add an identity transformation (`jaxley.optimize.transforms.IdentityTransform`) (#777, @chaseking)
 - Add handling of inhomogeneous branches for import and export of morphologies. (#779,@NicolasRR)
 - Add an logistic transformation (`jaxley.optimize.transforms.LogisticTransform`) (#788, @jnsbck)
+- Add `restore_structure` to `build_dynamic_state_utils` (5th return value) to rebuild
+NaN padding / branchpoints without computing membrane or synapse currents. For models
+whose `update_states` does not read currents (e.g. HH, Leak), this avoids a redundant
+current evaluation before `step`. Current-coupled models (e.g. `CaPump`) should keep
+using `add_observables`. `_step_channels_state` now only queries membrane currents that
+are already present in `states`.
 
 ### 🐛 Bug fixes
 

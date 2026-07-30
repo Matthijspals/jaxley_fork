@@ -3130,7 +3130,12 @@ class Module(ABC):
                 "capacitance",
             ]
             channel_state_names = list(channel.channel_states)
-            channel_state_names += self.membrane_current_names
+            # Only pass membrane currents that are already in `states` (skip missing keys).
+            channel_state_names += [
+                name
+                for name in self.membrane_current_names
+                if name in states and name not in channel_state_names
+            ]
             channel_indices = indices[channel_nodes[channel._name].astype(bool)]
 
             channel_params = query_channel_states_and_params(
