@@ -159,6 +159,7 @@ def test_jit_and_grad_network():
     1) Whether the `step_dynamics` function can be jitted.
     2) Whether .make_trainable() works.
     3) Whether .data_set and `param_state` work.
+    4) Whether `restore_structure` and `add_observables` give matching grads for Leak.
     """
     branch = jx.Branch()
     cell = jx.Cell(branch, [-1, 0])
@@ -209,7 +210,7 @@ def test_jit_and_grad_network():
         add_observables,
         flatten,
         unflatten,
-        _,
+        restore_structure,
     ) = build_dynamic_state_utils(net)
 
     def init_dynamics(params, param_state):
@@ -217,45 +218,72 @@ def test_jit_and_grad_network():
         dynamic_states = flatten(remove_observables(all_states))
         return dynamic_states, all_params
 
-    @jit
-    def step_dynamics(
-        dynamic_states, all_params, externals, external_inds, delta_t=0.025
-    ):
-        all_states = add_observables(
-            unflatten(dynamic_states), all_params, delta_t=delta_t
-        )
-        all_states = step_fn(
-            all_states, all_params, externals, external_inds, delta_t=delta_t
-        )
-        dynamic_states = flatten(remove_observables(all_states))
-        return dynamic_states
-
-    def loss(opt_params, pstate_params):
-        pstate = net.data_set("radius", pstate_params, None)
-
-        params = transform.forward(opt_params)
-        dynamic_states, all_params = init_dynamics(params, pstate)
-        dynamic_states_list = [dynamic_states]
-
-        # Simulate the model
-        for step in range(3):
-            # Get inputs at this time step
-            externals_now = get_externals_now(externals, step)
-            # Step the ODE
-            dynamic_states = step_dynamics(
-                dynamic_states, all_params, externals_now, external_inds, delta_t=0.025
+    def make_step_dynamics(rebuild):
+        @jit
+        def step_dynamics(
+            dynamic_states, all_params, externals, external_inds, delta_t=0.025
+        ):
+            all_states = rebuild(unflatten(dynamic_states), all_params, delta_t)
+            all_states = step_fn(
+                all_states, all_params, externals, external_inds, delta_t=delta_t
             )
-            # Store the state
-            dynamic_states_list.append(dynamic_states)
-        # Compute the loss at the last time step
-        loss = jnp.mean((dynamic_states_list[-1][state_idx] - target_voltage) ** 2)
+            dynamic_states = flatten(remove_observables(all_states))
+            return dynamic_states
+
+        return step_dynamics
+
+    def make_loss(step_dynamics):
+        def loss(opt_params, pstate_params):
+            pstate = net.data_set("radius", pstate_params, None)
+
+            params = transform.forward(opt_params)
+            dynamic_states, all_params = init_dynamics(params, pstate)
+            dynamic_states_list = [dynamic_states]
+
+            # Simulate the model
+            for step in range(3):
+                # Get inputs at this time step
+                externals_now = get_externals_now(externals, step)
+                # Step the ODE
+                dynamic_states = step_dynamics(
+                    dynamic_states,
+                    all_params,
+                    externals_now,
+                    external_inds,
+                    delta_t=0.025,
+                )
+                # Store the state
+                dynamic_states_list.append(dynamic_states)
+            # Compute the loss at the last time step
+            loss = jnp.mean((dynamic_states_list[-1][state_idx] - target_voltage) ** 2)
+            return loss
+
         return loss
 
-    # Compute the gradient of the loss with respect to the parameters
-    grad_loss = value_and_grad(loss, argnums=(0, 1))
-    value, gradient = grad_loss(opt_params, jnp.asarray(0.1))
-    opt_params_grads = gradient[0]
-    pstate_params_grads = gradient[1]
-    assert np.all(abs(opt_params_grads[0]["Leak_gLeak"]) > 0)
-    assert np.all(abs(opt_params_grads[1]["v"]) > 0)
-    assert np.all(abs(pstate_params_grads) > 0)
+    def rebuild_add(tree, all_params, delta_t):
+        return add_observables(tree, all_params, delta_t=delta_t)
+
+    def rebuild_restore(tree, all_params, delta_t):
+        return restore_structure(tree)
+
+    results = {}
+    for name, rebuild in [("add", rebuild_add), ("restore", rebuild_restore)]:
+        step_dynamics = make_step_dynamics(rebuild)
+        loss = make_loss(step_dynamics)
+        value, gradient = value_and_grad(loss, argnums=(0, 1))(
+            opt_params, jnp.asarray(0.1)
+        )
+        opt_params_grads = gradient[0]
+        pstate_params_grads = gradient[1]
+        assert np.all(abs(opt_params_grads[0]["Leak_gLeak"]) > 0)
+        assert np.all(abs(opt_params_grads[1]["v"]) > 0)
+        assert np.all(abs(pstate_params_grads) > 0)
+        results[name] = (value, opt_params_grads, pstate_params_grads)
+
+    # Leak does not read currents, so both rebuild paths must match.
+    assert np.allclose(results["add"][0], results["restore"][0])
+    assert np.allclose(
+        results["add"][1][0]["Leak_gLeak"], results["restore"][1][0]["Leak_gLeak"]
+    )
+    assert np.allclose(results["add"][1][1]["v"], results["restore"][1][1]["v"])
+    assert np.allclose(results["add"][2], results["restore"][2])
