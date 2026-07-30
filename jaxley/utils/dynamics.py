@@ -20,7 +20,9 @@ def _remove_currents_from_states(states: dict[str, Array], current_keys: list[st
     return {key: value for key, value in states.items() if key not in current_keys}
 
 
-def build_dynamic_state_utils(module) -> Tuple[Callable, Callable, Callable, Callable]:
+def build_dynamic_state_utils(
+    module,
+) -> Tuple[Callable, Callable, Callable, Callable, Callable]:
     r"""Return functions which extract the dynamic (ODE) states of a ``jx.Module``.
 
     These utility functions are meant to be used together with
@@ -36,6 +38,9 @@ def build_dynamic_state_utils(module) -> Tuple[Callable, Callable, Callable, Cal
       are only defined on a subset of compartments, the NaN padding is removed.
       As such, only "true" dynamic states remain. This is handled by the returned
       functions ``remove_observables`` and ``add_observables``.
+    - ``restore_structure`` restores NaN padding and branchpoints without computing
+      currents (unlike ``add_observables``). Useful when currents are recomputed
+      inside ``step`` and channels do not read currents in ``update_states``.
     - They return the states as a flat array. This allows easier interoperability
       with frameworks such as ``dynamax``. This is handled by the returned functions
       ``flatten`` and ``unflatten``.
@@ -85,6 +90,19 @@ def build_dynamic_state_utils(module) -> Tuple[Callable, Callable, Callable, Cal
 
             * All states of the system which can be recorded (Dict[str, Array]).
 
+        * ``restore_structure(dynamic_states_pytree)``
+
+          Callable which restores NaN padding and branchpoint voltages, but does
+          **not** compute membrane or synaptic currents.
+
+          * Args:
+
+            * ``dynamic_states_pytree`` (Dict[str, Array])
+
+          * Returns:
+
+            * States with structure restored (Dict[str, Array]), without currents.
+
         * ``flatten(dynamic_states_pytree)``
 
           Callable which flattens dynamic states as a pytree into a jnp.Array.
@@ -126,7 +144,13 @@ def build_dynamic_state_utils(module) -> Tuple[Callable, Callable, Callable, Cal
         params = cell.get_parameters()
 
         init_fn, step_fn = build_init_and_step_fn(cell)
-        remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(cell)
+        (
+            remove_observables,
+            add_observables,
+            flatten,
+            unflatten,
+            restore_structure,
+        ) = build_dynamic_state_utils(cell)
 
         all_states, all_params = init_fn(params)
 
@@ -155,7 +179,13 @@ def build_dynamic_state_utils(module) -> Tuple[Callable, Callable, Callable, Cal
         external_inds = cell.external_inds.copy()
 
         init_fn, step_fn = build_init_and_step_fn(cell)
-        remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(cell)
+        (
+            remove_observables,
+            add_observables,
+            flatten,
+            unflatten,
+            restore_structure,
+        ) = build_dynamic_state_utils(cell)
 
         all_states, all_params = init_fn(params)
         dynamic_states = flatten(remove_observables(all_states))
@@ -198,7 +228,13 @@ def build_dynamic_state_utils(module) -> Tuple[Callable, Callable, Callable, Cal
         params = cell.get_parameters()
 
         init_fn, step_fn = build_init_and_step_fn(cell)
-        remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(cell)
+        (
+            remove_observables,
+            add_observables,
+            flatten,
+            unflatten,
+            restore_structure,
+        ) = build_dynamic_state_utils(cell)
 
         def init_dynamics(params, param_state):
             all_states, all_params = init_fn(params, None, param_state)
@@ -383,25 +419,27 @@ def build_dynamic_state_utils(module) -> Tuple[Callable, Callable, Callable, Cal
         restored_array = restored_array.at[keep_indices].set(leaf)
         return restored_array
 
-    def add_observables(
+    def restore_structure(
         dynamic_states_pytree: dict[str, Array],
-        all_params: dict[str, Array],
-        delta_t: float,
     ) -> dict[str, Array]:
-        """Add membrane currents, synaptic currents, and branchpoint voltages to states.
+        """Restore NaN padding and branchpoint slots (no current computation).
+
+        Unlike ``add_observables``, this does **not** call
+        ``append_channel_currents_to_states``. Use this when currents will be
+        recomputed inside ``step`` and channel ``update_states`` methods do not
+        depend on membrane/synapse currents (e.g. HH, Leak).
+
+        Note: ``step`` / ``_step_channels_state`` indexes ``membrane_current_names``
+        on the state dict. If those keys are absent, callers must insert
+        placeholders (e.g. zeros) before calling ``step``.
 
         Args:
             dynamic_states_pytree: Contains all dynamic states of the module,
                 formatted as a dictionary of jax arrays.
-            all_params: Contains _all_ parameters that are needed to simulate the
-                system.
-            delta_t: The time step.
 
         Returns:
-            ``all_states`` which can be passed to the ``step_fn`` (returned by
-            ``jx.integrate.build_init_and_step_fn``).
+            States with NaN padding and branchpoints restored, without currents.
         """
-
         # Restore NaN padding.
         all_states_with_nans = tree_map_with_path(
             lambda path, leaf: (
@@ -424,13 +462,35 @@ def build_dynamic_state_utils(module) -> Tuple[Callable, Callable, Callable, Cal
         else:
             restored_states = all_states_with_nans
 
+        return restored_states
+
+    def add_observables(
+        dynamic_states_pytree: dict[str, Array],
+        all_params: dict[str, Array],
+        delta_t: float,
+    ) -> dict[str, Array]:
+        """Add membrane currents, synaptic currents, and branchpoint voltages to states.
+
+        Args:
+            dynamic_states_pytree: Contains all dynamic states of the module,
+                formatted as a dictionary of jax arrays.
+            all_params: Contains _all_ parameters that are needed to simulate the
+                system.
+            delta_t: The time step.
+
+        Returns:
+            ``all_states`` which can be passed to the ``step_fn`` (returned by
+            ``jx.integrate.build_init_and_step_fn``).
+        """
+        restored_states = restore_structure(dynamic_states_pytree)
+
         # Add channel currents to the restored states.
         restored_states = module.append_channel_currents_to_states(
             restored_states, all_params, delta_t=delta_t
         )
         return restored_states
 
-    return remove_observables, add_observables, flatten, unflatten
+    return remove_observables, add_observables, flatten, unflatten, restore_structure
 
 
 def _take_by_idx(x, idx):

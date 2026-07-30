@@ -35,9 +35,13 @@ def test_cycle_consistency():
     cell.to_jax()
 
     init_fn, step_fn = build_init_and_step_fn(cell)
-    remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(
-        cell
-    )
+    (
+        remove_observables,
+        add_observables,
+        flatten,
+        unflatten,
+        restore_structure,
+    ) = build_dynamic_state_utils(cell)
     all_states, all_params = init_fn([])
     dynamic_states = flatten(remove_observables(all_states))
     restored = add_observables(unflatten(dynamic_states), all_params, delta_t=0.025)
@@ -60,9 +64,13 @@ def test_build_step_dynamics_fn_branchpoints(branchpoint):
 
     # get states and unflatten functions
     init_fn, step_fn = build_init_and_step_fn(cell)
-    remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(
-        cell
-    )
+    (
+        remove_observables,
+        add_observables,
+        flatten,
+        unflatten,
+        restore_structure,
+    ) = build_dynamic_state_utils(cell)
     all_states, all_params = init_fn([])
     dynamic_states = flatten(remove_observables(all_states))
 
@@ -138,9 +146,13 @@ def test_jit_and_grad_network():
     state_idx = 0
 
     init_fn, step_fn = build_init_and_step_fn(net)
-    remove_observables, add_observables, flatten, unflatten = build_dynamic_state_utils(
-        net
-    )
+    (
+        remove_observables,
+        add_observables,
+        flatten,
+        unflatten,
+        restore_structure,
+    ) = build_dynamic_state_utils(net)
 
     def init_dynamics(params, param_state):
         all_states, all_params = init_fn(params, None, param_state)
