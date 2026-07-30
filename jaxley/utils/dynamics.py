@@ -428,7 +428,8 @@ def build_dynamic_state_utils(
         ``append_channel_currents_to_states``. Use this when currents will be
         recomputed inside ``step`` and channel ``update_states`` methods do not
         depend on membrane/synapse currents (e.g. HH, Leak). For current-coupled
-        models, use ``add_observables`` instead.
+        models, use ``add_observables`` instead (or declare currents in
+        ``channel_states`` so they remain dynamic states).
 
         Args:
             dynamic_states_pytree: Contains all dynamic states of the module,

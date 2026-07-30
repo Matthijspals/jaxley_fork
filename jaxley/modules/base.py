@@ -3132,8 +3132,9 @@ class Module(ABC):
             channel_state_names = list(channel.channel_states)
             # Include membrane currents only when present. Channels that depend on
             # currents should declare them in ``channel_states`` (or call ``step``
-            # with currents already in ``states``, e.g. via ``add_observables``).
-            # This allows ``restore_structure`` (no currents) for HH/Leak-style models.
+            # with currents already in ``states``, e.g. via ``add_observables`` /
+            # a previous ``step``). This allows ``restore_structure`` (no currents)
+            # for HH/Leak-style models whose ``update_states`` does not read currents.
             channel_state_names += [
                 name
                 for name in self.membrane_current_names

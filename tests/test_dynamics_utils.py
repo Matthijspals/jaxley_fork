@@ -48,7 +48,7 @@ def test_cycle_consistency():
     reraveled = flatten(remove_observables(restored))
     assert np.allclose(reraveled, dynamic_states)
 
-    # restore_structure omits currents; add_observables adds them.
+    # restore_structure omits currents; add_observables computes them.
     structured = restore_structure(unflatten(dynamic_states))
     assert "i_HH" not in structured
     assert "i_HH" in restored
