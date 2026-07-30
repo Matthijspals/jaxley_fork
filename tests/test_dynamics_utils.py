@@ -48,6 +48,11 @@ def test_cycle_consistency():
     reraveled = flatten(remove_observables(restored))
     assert np.allclose(reraveled, dynamic_states)
 
+    # restore_structure omits currents; add_observables adds them.
+    structured = restore_structure(unflatten(dynamic_states))
+    assert "i_HH" not in structured
+    assert "i_HH" in restored
+
 
 @pytest.mark.parametrize(
     "branchpoint", [True, False], ids=["branchpoint", "no_branchpoint"]

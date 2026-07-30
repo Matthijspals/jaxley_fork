@@ -3130,7 +3130,15 @@ class Module(ABC):
                 "capacitance",
             ]
             channel_state_names = list(channel.channel_states)
-            channel_state_names += self.membrane_current_names
+            # Include membrane currents only when present. Channels that depend on
+            # currents should declare them in ``channel_states`` (or call ``step``
+            # with currents already in ``states``, e.g. via ``add_observables``).
+            # This allows ``restore_structure`` (no currents) for HH/Leak-style models.
+            channel_state_names += [
+                name
+                for name in self.membrane_current_names
+                if name in states and name not in channel_state_names
+            ]
             channel_indices = indices[channel_nodes[channel._name].astype(bool)]
 
             channel_params = query_channel_states_and_params(
