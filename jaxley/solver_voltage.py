@@ -186,12 +186,11 @@ def step_voltage_implicit_with_dhs_solve(
     if len(sinks) > 0:
         diags = diags.at[sinks].add(axial_conductances)
 
-    # Build solve. Use set + add (not `v[i] + dt * c[i]`) to avoid an XLA
-    # constant-folding bug under jit(vmap) on jax 0.5.3–0.8.1 (jax#33479).
+    # Build solve. Add before gather so XLA does not constant-fold
+    # `v[i] + dt * c[i]` under jit(vmap) on jax 0.5.3–0.8.1 (jax#33479).
     solves = jnp.zeros(n_nodes)
-    solves = solves.at[internal_node_inds].set(voltages[internal_node_inds])
-    solves = solves.at[internal_node_inds].add(
-        (delta_t * constant_terms)[internal_node_inds]
+    solves = solves.at[internal_node_inds].set(
+        (voltages + delta_t * constant_terms)[internal_node_inds]
     )
 
     # Why `n_nodes > 1`? For compartments (or point neurons), we save computation and
@@ -377,11 +376,10 @@ def step_voltage_implicit_with_jax_spsolve(
     if len(sinks) > 0:
         diags = diags.at[sinks].add(axial_conductances)
 
-    # Build solve.
+    # Build solve. Add before gather; see `step_voltage_implicit_with_dhs_solve`.
     solves = jnp.zeros(n_nodes)
-    solves = solves.at[internal_node_inds].set(voltages[internal_node_inds])
-    solves = solves.at[internal_node_inds].add(
-        (delta_t * constant_terms)[internal_node_inds]
+    solves = solves.at[internal_node_inds].set(
+        (voltages + delta_t * constant_terms)[internal_node_inds]
     )
 
     # Concatenate diagonals and off-diagonals (which are just `-axial_conductances`).
@@ -548,11 +546,10 @@ def step_voltage_implicit_with_stone(
     upper_inds = sinks < sources
     uppers = -axial_conductances[upper_inds]
 
-    # Build solve.
+    # Build solve. Add before gather; see `step_voltage_implicit_with_dhs_solve`.
     solves = jnp.zeros(n_nodes)
-    solves = solves.at[internal_node_inds].set(voltages[internal_node_inds])
-    solves = solves.at[internal_node_inds].add(
-        (delta_t * constant_terms)[internal_node_inds]
+    solves = solves.at[internal_node_inds].set(
+        (voltages + delta_t * constant_terms)[internal_node_inds]
     )
 
     # Solve the tridiagonal system.

@@ -120,7 +120,7 @@ def test_dhs_vmap_closed_over_rhs_matches_arg():
     On jax/jaxlib in roughly ``[0.5.3, 0.8.1]``, the old RHS form
     ``v[i] + dt * c[i]`` inside ``step_voltage_implicit_with_dhs_solve`` returned
     wrong primals when the RHS matrix was a compile-time constant (jax#33479 /
-    xla#34260). This regression guards the scale-before-gather rewrite.
+    xla#34260). This regression guards the add-then-gather rewrite.
     """
     from jaxley.channels import Leak
     from jaxley.integrate import build_init_and_step_fn
